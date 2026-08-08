@@ -172,4 +172,7 @@ def get_antialiased_decimated_traces(
         )
     start_drop = left_margin // q
     n_out = end_frame - start_frame
-    return decimated_traces[start_drop : start_drop + n_out].astype(dtype)
+    decimated_traces = decimated_traces[start_drop : start_drop + n_out]
+    if np.issubdtype(np.dtype(dtype), np.integer):
+        np.round(decimated_traces, out=decimated_traces)  # Don't truncate towards zero
+    return decimated_traces.astype(dtype, copy=False)
