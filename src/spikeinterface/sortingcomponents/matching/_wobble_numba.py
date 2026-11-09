@@ -8,7 +8,8 @@ The kernels' arguments include three tuples:
 - templates: each jittered template's waveform on its template's visible channels (padded to the most visible
   channels of any template), those channels and how many there are, each channel's position among a template's
   visible channels (-1 where it is not visible), the squared norms, the template overlap and each template's unit;
-- params: jitter factor, 1 / amplitude variance, scale bounds, refractory period and re-placements per spike.
+- params: jitter factor, 1 / amplitude variance, scale bounds, refractory period, re-placements per spike and the most
+  spikes a spike is fitted together with.
 """
 
 import numpy as np
@@ -45,9 +46,12 @@ def add_spikes(spike_train, state, templates, params):
 
 @njit(cache=True, fastmath={"reassoc", "contract"})
 def _place(start, jittered_index, slot, state, templates, params):
-    """Refine a spike's start and jitter, then fit it with the spikes it overlaps; returns its index and those."""
+    """Refine a spike's start and jitter, then fit it with the spikes it overlaps (at most the params[6] most coupled to
+    it); returns its index and those."""
     num_samples = templates[0].shape[2]
     near = _overlapping(start, jittered_index, num_samples + 1, slot, state, templates, params)
+    if len(near) > params[6]:
+        near = _most_coupled(start, jittered_index, near, state, templates, params)
     gram, rhs, amplitudes = _near_system(near, state, templates, params)
     start, jittered_index = _refine(start, jittered_index, near, gram, rhs, amplitudes, state, templates, params)
     slot = _fit(start, jittered_index, near, gram, rhs, amplitudes, slot, state, templates, params)
@@ -79,6 +83,26 @@ def _overlapping(start, jittered_index, reach, exclude, state, templates, params
         if counting:
             found = np.empty(count, dtype=np.int64)
     return found
+
+
+@njit(cache=True, fastmath={"reassoc", "contract"})
+def _most_coupled(start, jittered_index, near, state, templates, params):
+    """The spikes of near whose amplitudes are most coupled to the spike's (their inner product over the smaller squared
+    norm), as many as params allows, with any of the same unit within the refractory period first; in their order."""
+    starts, jittered = state[1], state[2]
+    norms, unit_of = templates[4], templates[6]
+    jitter_factor, inv_lambda, refractory_period = params[0], params[1], params[4]
+    unit = unit_of[jittered_index // jitter_factor]
+    coupling = np.empty(len(near))
+    for p in range(len(near)):
+        i = near[p]
+        if unit_of[jittered[i] // jitter_factor] == unit and abs(starts[i] - start) <= refractory_period:
+            coupling[p] = np.inf
+        else:
+            product = _template_product(start, jittered_index, starts[i], jittered[i], templates, params)
+            coupling[p] = abs(product) / (min(norms[jittered_index], norms[jittered[i]]) + inv_lambda)
+    kept = np.sort(np.argsort(-coupling, kind="mergesort")[: params[6]])
+    return near[kept]
 
 
 @njit(cache=True, fastmath={"reassoc", "contract"})
@@ -312,7 +336,8 @@ def _bin_remove(i, b, bin_head, bin_tail, bin_next):
 
 @njit(cache=True, fastmath={"reassoc", "contract"})
 def _bounded_solve(gram, rhs, lower, upper):
-    """Solve gram @ x = rhs for lower <= x <= upper: entries out of bounds are fixed at them and the rest solved again."""
+    """Solve gram @ x = rhs for lower <= x <= upper: entries out of bounds are fixed at them and the rest solved
+    again."""
     x = np.linalg.solve(gram, rhs)
     m = len(x)
     fixed = np.zeros(m, dtype=np.bool_)

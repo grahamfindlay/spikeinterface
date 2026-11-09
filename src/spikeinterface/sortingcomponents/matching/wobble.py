@@ -975,9 +975,11 @@ class _JointFit:
 
     A new spike first gets the start (within a sample of its peak) and jitter whose fit, together with the spikes it
     overlaps, explains the most of the residual; its amplitude and theirs are then fitted together by least squares
-    (with the amplitude prior). The spikes it overlaps were placed before it was found, so each is then taken out and
-    placed and fitted again in the same way, and so on while any of them moves (coordinate descent on the starts and
-    jitters). The objectives are brought up to date with the residual once per batch of new spikes.
+    (with the amplitude prior). Where more than max_near spikes overlap it, as in an artifact, it is fitted only with
+    those whose amplitudes are most coupled to its own, which bounds the work per spike. The spikes it overlaps were
+    placed before it was found, so each is then taken out and placed and fitted again in the same way, and so on while
+    any of them moves (coordinate descent on the starts and jitters). The objectives are brought up to date with the
+    residual once per batch of new spikes.
 
     Templates near a spike are credited in the detection objective with their projection onto it, so that a peak there
     is the gain of adding a spike at unit amplitude with the spike it overlaps refitted, instead of with that spike's
@@ -988,6 +990,8 @@ class _JointFit:
 
     # re-placements allowed per spike involved, after a new spike is placed
     max_replacements = 10
+    # the most spikes a spike is fitted together with: those whose amplitudes are most coupled to its own
+    max_near = 8
 
     def __init__(self, matcher, traces, objective):
         self.inv_lambda = 1 / matcher.params.amplitude_variance
@@ -1003,6 +1007,7 @@ class _JointFit:
             float(params.scale_max),
             np.int64(params.refractory_period_frames),
             np.int64(self.max_replacements),
+            np.int64(self.max_near),
         )
         num_bins = traces.shape[0] // matcher.template_meta.num_samples + 1
         # laid out as _wobble_numba describes; the arrays for each spike grow in add
